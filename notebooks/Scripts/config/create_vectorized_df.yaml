@@ -1,0 +1,7 @@
+model:
+  meta_model_path: "../Experiments/mlruns/models/tf_idf_linear_score.pt/version-2/meta.yaml"
+data:
+  df_path:  "../data/df_art_to_par.csv"
+  target_column:  "paragraph"
+  index_col:  "article_id"
+  path_to_save: "../data/df_art_to_par_vect.pkl"
