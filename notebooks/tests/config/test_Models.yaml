@@ -1,0 +1,3 @@
+test_TFIDFLinearScore:
+  model:
+    meta_model_path: "../Experiments/mlruns/models/tf_idf_linear_score.pt/version-2/meta.yaml"
