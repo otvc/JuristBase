@@ -1,13 +1,18 @@
+from typing import Union, Optional
+
+import math
+
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-
 import numpy as np
+import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-
-
+from transformers import Pipeline, PreTrainedTokenizer, TFPreTrainedModel, PreTrainedModel
+from transformers.pipelines import ArgumentHandler
+from transformers.modelcard import ModelCard
 
 class Retriever(nn.Module):
     
@@ -42,11 +47,16 @@ class RetrieverDouble(Retriever):
         super().__init__(score_model)
         self.model_quest = model_quest
         self.model_doc = model_doc
-
-    def forward(self, x:tuple[torch.Tensor]):
+    
+    '''
+    On inference you can't use convert document, and use predetermined embeddings.
+    If you will wan't use it, that change `inference` on `True` and send document in touple like
+    torch.Tensors
+    '''
+    def forward(self, x:tuple[torch.Tensor], inference = False):
         x_q, x_d = x
         output_q = self.model_quest(x_q) # (batch_size, quest_emb_dim)
-        output_d = self.model_doc(x_d) # (batch_size, doc_emb_dim)
+        output_d = self.model_doc(x_d) if not inference else x_d # (batch_size, doc_emb_dim)
         
         scores = self.score_model((output_q, output_d)) # (batch_size)
         
@@ -75,8 +85,85 @@ class LinearScore(nn.Module):
         if self.sigm_active:
             output = F.sigmoid(output)
         return output
-   
 
+class PipelineTFIDFLinearScore:
+    
+    def __init__(self, model, 
+                 codes, 
+                 codes_tree, 
+                 vectorized_art:pd.DataFrame, 
+                 vector_column:str) -> None:
+        self.model = model
+        self.codes = codes
+        self.codes_tree = codes_tree
+        self.vectorized_art = vectorized_art
+        self.vector_column = vector_column
+
+    def _sanitize_parameters(self, **kwargs):
+        preprocess_kwargs = {}
+        preprocess_kwargs['doc_batch_size'] = kwargs['doc_batch_size'] if 'doc_batch_size' in kwargs else 32
+        self.top_k  = kwargs['top_k'] if 'top_k' in kwargs else 4
 
         
+        return preprocess_kwargs, {}, {}
+    
+    def create_query_articles_generator(self, text, batch_size):
+        total_articles = self.vectorized_art.shape[0] # total articles count, for which we should estimate match
+        total_batch_count = math.ceil(total_articles/batch_size) # total count of batch for particular bs
+        def gen_query_article():
+            for i in range(total_batch_count):
+                vectors = self.vectorized_art.iloc[i*batch_size:(i+1)*batch_size][self.vector_column].values
+                vectors = torch.Tensor(list(map(lambda x: x.toarray(), vectors))).reshape((vectors.shape[0], vectors[0].shape[-1]))
+                yield ([text]*vectors.size(0), vectors)
+                
+        return gen_query_article
         
+    def preprocess(self, inputs):
+        model_input = inputs["input_text"] # (count_queries)
+        batch_size = inputs['doc_batch_size'] #batch for use on inference with model
+        text_generators = []
+        for text in model_input:
+            text_gen = self.create_query_articles_generator(text, batch_size)
+            text_generators.append(text_gen)
+        
+        return {"model_input_gen": text_generators}
+    
+    def _forward(self, model_input):
+        batch_gen = model_input["model_input_gen"]
+        output = []
+        for batch_gen_text in batch_gen:
+            particular_output = []
+            for batch in batch_gen_text():
+                batch_out = self.model(batch, inference = True)
+                particular_output.append(batch_out)
+            output.append(torch.concat(particular_output))
+        return output
+    
+    def get_full_article_name_by_iloc(self, iloc_indeces):
+        article_indexes = self.vectorized_art.iloc[iloc_indeces].index
+        if article_indexes.shape[0] == 0:
+            return []
+        needed_articles = self.codes_tree[self.codes_tree.index.isin(article_indexes)]
+        needed_articles.rename(columns={'Name':'article_name'}, inplace = True)
+        full_name_article = needed_articles.join(self.codes, on = 'codes_id', how = 'inner', rsuffix = 'r_')
+        full_name_article['full_text'] = full_name_article['Name'] + '; ' + full_name_article['article_name']
+        return full_name_article['full_text'].values
+    
+    def postprocess(self, model_outputs):
+        output_full_names = [] # (count_queries, __) contain for query `iloc` ids of particular article  
+        for part_output in model_outputs:
+            part_output = F.softmax(part_output, dim = -1)
+            df_probas = pd.DataFrame(part_output)
+            iloc_art_ids = df_probas.sort_values(0, ascending=0).head(self.top_k+1).index
+            full_names = self.get_full_article_name_by_iloc(iloc_art_ids)
+            output_full_names.append(full_names)
+        return output_full_names
+ 
+    def __call__(self, input, **kwargs):
+        sanitized_args, _, _ = self._sanitize_parameters(**kwargs)
+        sanitized_args.update(input)
+        preprocessed = self.preprocess(sanitized_args)
+        output = self._forward(preprocessed)
+        postprocessed_output = self.postprocess(output)
+        return postprocessed_output
+
