@@ -6,6 +6,7 @@ from tqdm import tqdm
 from IPython import display
 import matplotlib.pyplot as plt
 
+import pandas as pd
 
 def unpack_retriever_tfidf(batch):
     questions = batch['question']
@@ -81,3 +82,13 @@ def train_tfidf_linear_score(model, train_dataloader, val_dataloader, optimizer,
                              epochs = 100, every_batch = 5, plot_loss = True):
     return train(model, train_dataloader, val_dataloader, optimizer, criterion, unpack_retriever_tfidf, 
                  epochs=epochs, every_batch = every_batch, plot_loss = plot_loss)
+
+def df_to_tfidf_vectors(df, text_column, vectorizer):
+    df = df.copy()
+    
+    def text_column_conv(x):
+        x[text_column] = vectorizer.transform([x[text_column]])
+        return x
+    tqdm.pandas()
+    df[text_column] = df.progress_apply(text_column_conv, axis = 1)
+    return df
