@@ -73,6 +73,42 @@ class TFIDFNet(nn.Module):
         output = torch.Tensor(output)
         return output
     
+class TFIDFNetEmb(nn.Module):
+    
+    def __init__(self, vectorizer, out_features = 128):
+        super(TFIDFNetEmb, self).__init__()
+        self.vectorizer = vectorizer
+        
+        in_features = vectorizer.transform(['0']).toarray().shape[-1]
+        self.fc1 = nn.Linear(in_features, out_features=out_features)
+        self.act1 = nn.Tanh()
+        self.block = nn.Sequential(self.fc1, self.act1)
+        
+    def forward(self, x):
+        tfidf_features = self.vectorizer.transform(x).toarray() #(batch_size, emb_dim)
+        tfidf_features = torch.Tensor(tfidf_features)
+        output = self.block(tfidf_features)
+        
+        return output
+    
+class Twins(nn.Module):
+    
+    def __init__(self, model_quest, model_doc):
+        super(Twins, self).__init__()
+        self.model_quest = model_quest
+        self.model_doc = model_doc
+    
+    '''
+    On inference you can't use convert document, and use predetermined embeddings.
+    If you will wan't use it, that change `inference` on `True` and send document in touple like
+    torch.Tensors
+    '''
+    def forward(self, x:tuple[torch.Tensor], inference = False):
+        x_q, x_d = x
+        output_q = self.model_quest(x_q) # (batch_size, quest_emb_dim)
+        output_d = self.model_doc(x_d) if not inference else x_d # (batch_size, doc_emb_dim)
+        return (output_q, output_d)
+    
 class LinearScore(nn.Module):
     def __init__(self, q_dim, d_dim, n_scores = 1, sigm_active = False):
         super().__init__()
@@ -84,6 +120,23 @@ class LinearScore(nn.Module):
         output = self.fc(x)
         if self.sigm_active:
             output = F.sigmoid(output)
+        return output
+    
+class CosineScore(nn.Module):
+
+    def __init__(self, dim = 1) -> None:
+        super(CosineScore,  self).__init__()
+        self.cos_sim = nn.CosineSimilarity(dim)
+    
+    '''
+    
+    `params`:
+        `x`:tuple : tuple of 2 tensors with question and documents, which should have similar shapes.
+                    Embeddings should be contain on self.dim on both tensors.
+    '''
+    def forward(self, x:tuple):
+        q_emb, d_emb = x
+        output = self.cos_sim(q_emb, d_emb)
         return output
 
 class PipelineTFIDFLinearScore:
