@@ -1,6 +1,11 @@
+import sys
+
 import torch
 from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+from JuristEngine.Models import RetrieverDouble, TFIDFNet, LinearScore, CosineScore
 
 '''
 Function for loading train, test, validation datasets
@@ -29,3 +34,12 @@ def savefig_train_val(train_loss, val_loss, path, title_suffix=''):
     axes.legend()
 
     plt.savefig(path)
+
+def parse_experiments_args():
+    lr = float(sys.argv[1]) if len(sys.argv) > 1 else 1e-3
+    epochs = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    batch_size = int(sys.argv[3]) if len(sys.argv) > 3 else 32
+    max_quest_features = int(sys.argv[4]) if len(sys.argv) > 4 else 1000
+    max_doc_features = int(sys.argv[5]) if len(sys.argv) > 5 else 1000
+    return lr, epochs, batch_size, max_quest_features, max_doc_features
+
